@@ -131,9 +131,9 @@
 import { ref, reactive, onMounted } from 'vue'
 
 // Environment variables
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
-const SHEET_ID = import.meta.env.VITE_SPREADSHEET_ID
-const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY
+const CLIENT_ID = import.meta.env.GOOGLE_CLIENT_ID
+const SHEET_ID = import.meta.env.SPREADSHEET_ID
+const API_KEY = import.meta.env.GOOGLE_API_KEY
 const SHEET_NAME = 'Sheet1'
 
 console.log('Environment variables loaded:', {
