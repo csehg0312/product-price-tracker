@@ -131,8 +131,8 @@
 import { ref, reactive, onMounted } from 'vue'
 
 // Environment variables
-const CLIENT_ID = import.meta.env.GOOGLE_CLIENT_ID
-const SHEET_ID = import.meta.env.SPREADSHEET_ID
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+const SHEET_ID = import.meta.env.VITE_SPREADSHEET_ID
 const API_KEY = import.meta.env.GOOGLE_API_KEY
 const SHEET_NAME = 'Sheet1'
 
@@ -188,10 +188,10 @@ const checkConfiguration = () => {
   
   if (!isConfigured.value) {
     if (!CLIENT_ID) {
-      showMessage('VITE_GOOGLE_CLIENT_ID missing in .env file', 'error')
+      showMessage('GOOGLE_CLIENT_ID missing in .env file', 'error')
     }
     if (!SHEET_ID) {
-      showMessage('VITE_SPREADSHEET_ID missing in .env file', 'error')
+      showMessage('SPREADSHEET_ID missing in .env file', 'error')
     }
   }
 }
