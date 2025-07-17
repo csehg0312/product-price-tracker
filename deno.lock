@@ -4,6 +4,7 @@
     "npm:@vitejs/plugin-vue@6": "6.0.0_vite@7.0.5__picomatch@4.0.3_vue@3.5.17",
     "npm:googleapis@153": "153.0.0",
     "npm:vite@^7.0.4": "7.0.5_picomatch@4.0.3",
+    "npm:vue-router@^4.5.1": "4.5.1_vue@3.5.17",
     "npm:vue@^3.5.17": "3.5.17"
   },
   "npm": {
@@ -311,6 +312,9 @@
         "@vue/compiler-dom",
         "@vue/shared"
       ]
+    },
+    "@vue/devtools-api@6.6.4": {
+      "integrity": "sha512-sGhTPMuXqZ1rVOk32RylztWkfXTRhuS7vgAKv0zjqk8gbsHkJ7xfFf+jbySxt7tWObEJwyKaHMikV/WGDiQm8g=="
     },
     "@vue/reactivity@3.5.17": {
       "integrity": "sha512-l/rmw2STIscWi7SNJp708FK4Kofs97zc/5aEPQh4bOsReD/8ICuBcEmS7KGwDj5ODQLYWVN2lNibKJL1z5b+Lw==",
@@ -746,6 +750,13 @@
       ],
       "bin": true
     },
+    "vue-router@4.5.1_vue@3.5.17": {
+      "integrity": "sha512-ogAF3P97NPm8fJsE4by9dwSYtDwXIY1nFY9T6DyQnGHd1E2Da94w9JIolpe42LJGIl0DwOHBi8TcRPlPGwbTtw==",
+      "dependencies": [
+        "@vue/devtools-api",
+        "vue"
+      ]
+    },
     "vue@3.5.17": {
       "integrity": "sha512-LbHV3xPN9BeljML+Xctq4lbz2lVHCR6DtbpTf5XIO6gugpXUN49j2QQPcMj086r9+AkJ0FfUT8xjulKKBkkr9g==",
       "dependencies": [
@@ -766,6 +777,7 @@
         "npm:@vitejs/plugin-vue@6",
         "npm:googleapis@153",
         "npm:vite@^7.0.4",
+        "npm:vue-router@^4.5.1",
         "npm:vue@^3.5.17"
       ]
     }

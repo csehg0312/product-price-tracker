@@ -135,6 +135,7 @@ const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 const SHEET_ID = import.meta.env.VITE_SPREADSHEET_ID
 const API_KEY = import.meta.env.GOOGLE_API_KEY
 const SHEET_NAME = 'Sheet1'
+const CURRENT_ROW = 17
 
 console.log('Environment variables loaded:', {
   CLIENT_ID: CLIENT_ID ? 'Set' : 'Missing',
@@ -315,16 +316,18 @@ const appendToSheet = async () => {
   let url, headers
 
   if (currentAuthMethod.value === 'OAuth') {
-    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A:E:append?valueInputOption=RAW`
+    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A${CURRENT_ROW}:E${CURRENT_ROW}:append?valueInputOption=USER_ENTERED`
     headers = {
       'Authorization': `Bearer ${accessToken.value}`,
       'Content-Type': 'application/json',
     }
+    CURRENT_ROW=CURRENT_ROW + 1
   } else {
-    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A:E:append?valueInputOption=RAW&key=${accessToken.value}`
+    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A${CURRENT_ROW}:E${CURRENT_ROW}:append?valueInputOption=USER_ENTERED`
     headers = {
       'Content-Type': 'application/json',
     }
+    CURRENT_ROW = CURRENT_ROW + 1
   }
 
   const response = await fetch(url, {
