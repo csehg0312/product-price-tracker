@@ -3,50 +3,40 @@
     <div class="container">
       <h1>Product Price Tracker</h1>
       
-      <!-- Configuration Section -->
+      <!-- Configuration Status -->
       <div v-if="!isConfigured" class="setup-info">
-        <h3>⚠️ Setup Required</h3>
-        <p>Configure your Google Sheets API access to start tracking products:</p>
-        
-        <div class="config-form">
-          <div class="form-group">
-            <label for="apiKey">Google Sheets API Key:</label>
-            <input 
-              type="password" 
-              id="apiKey" 
-              v-model="config.apiKey" 
-              placeholder="Enter your API key"
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="sheetId">Google Sheet ID:</label>
-            <input 
-              type="text" 
-              id="sheetId" 
-              v-model="config.sheetId" 
-              placeholder="Sheet ID from URL"
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="sheetName">Sheet Name:</label>
-            <input 
-              type="text" 
-              id="sheetName" 
-              v-model="config.sheetName" 
-              placeholder="Sheet1"
-            />
-          </div>
-          
-          <button @click="saveConfig" class="config-btn">
-            Save Configuration
+        <h3>⚠️ Configuration Required</h3>
+        <p>Please check your environment variables:</p>
+        <ul>
+          <li>VITE_GOOGLE_CLIENT_ID: {{ CLIENT_ID ? '✅ Set' : '❌ Missing' }}</li>
+          <li>VITE_SPREADSHEET_ID: {{ SHEET_ID ? '✅ Set' : '❌ Missing' }}</li>
+          <li>VITE_GOOGLE_API_KEY: {{ API_KEY ? '✅ Set' : '❌ Missing (Optional)' }}</li>
+        </ul>
+        <p v-if="!CLIENT_ID || !SHEET_ID" class="error-text">
+          Missing required environment variables. Please add them to your .env file.
+        </p>
+      </div>
+
+      <!-- Authentication Method Selection -->
+      <div v-if="isConfigured && !isAuthenticated" class="auth-section">
+        <h3>Choose Authentication Method</h3>
+        <div class="auth-buttons">
+          <button @click="authenticateWithOAuth" :disabled="loading" class="auth-btn oauth-btn">
+            {{ loading && authMethod === 'oauth' ? 'Authenticating...' : 'Sign in with Google' }}
+          </button>
+          <button v-if="API_KEY" @click="authenticateWithApiKey" :disabled="loading" class="auth-btn api-btn">
+            {{ loading && authMethod === 'apikey' ? 'Connecting...' : 'Use API Key' }}
           </button>
         </div>
       </div>
 
       <!-- Add Product Form -->
-      <div v-if="isConfigured" class="form-container">
+      <div v-if="isAuthenticated" class="form-container">
+        <div class="auth-status">
+          <span class="auth-indicator">✅ Authenticated via {{ currentAuthMethod }}</span>
+          <button @click="signOut" class="sign-out-btn">Sign Out</button>
+        </div>
+        
         <h2>Add New Product</h2>
         <form @submit.prevent="addProduct" class="product-form">
           <div class="form-group">
@@ -133,13 +123,6 @@
           </div>
         </div>
       </div>
-
-      <!-- Reset Configuration -->
-      <div v-if="isConfigured" class="reset-section">
-        <button @click="resetConfig" class="reset-btn">
-          Reset Configuration
-        </button>
-      </div>
     </div>
   </div>
 </template>
@@ -149,12 +132,25 @@ import { ref, reactive, onMounted } from 'vue'
 
 // Environment variables
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+const SHEET_ID = import.meta.env.VITE_SPREADSHEET_ID
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY
+const SHEET_NAME = 'Sheet1'
+
+console.log('Environment variables loaded:', {
+  CLIENT_ID: CLIENT_ID ? 'Set' : 'Missing',
+  SHEET_ID: SHEET_ID ? 'Set' : 'Missing', 
+  API_KEY: API_KEY ? 'Set' : 'Missing'
+})
 
 // Reactive state
 const loading = ref(false)
 const message = ref('')
 const messageClass = ref('')
 const isConfigured = ref(false)
+const isAuthenticated = ref(false)
+const authMethod = ref('')
+const currentAuthMethod = ref('')
+const accessToken = ref('')
 
 const newProduct = reactive({
   name: '',
@@ -162,12 +158,6 @@ const newProduct = reactive({
   currency: '€',
   shop: '',
   date: new Date().toISOString().split('T')[0]
-})
-
-const config = reactive({
-  apiKey: '',
-  sheetId: '',
-  sheetName: 'Sheet1'
 })
 
 const recentProducts = ref([])
@@ -192,38 +182,102 @@ const resetForm = () => {
   })
 }
 
-// Configuration management
-const loadConfig = () => {
-  const savedConfig = localStorage.getItem('googleSheetsConfig')
-  if (savedConfig) {
-    Object.assign(config, JSON.parse(savedConfig))
-    isConfigured.value = !!(config.apiKey && config.sheetId)
-  }
+// Configuration check
+const checkConfiguration = () => {
+  isConfigured.value = !!(CLIENT_ID && SHEET_ID)
   
-  const savedProducts = localStorage.getItem('recentProducts')
-  if (savedProducts) {
-    recentProducts.value = JSON.parse(savedProducts)
+  if (!isConfigured.value) {
+    if (!CLIENT_ID) {
+      showMessage('VITE_GOOGLE_CLIENT_ID missing in .env file', 'error')
+    }
+    if (!SHEET_ID) {
+      showMessage('VITE_SPREADSHEET_ID missing in .env file', 'error')
+    }
   }
 }
 
-const saveConfig = () => {
-  if (!config.apiKey || !config.sheetId) {
-    showMessage('Please provide both API key and Sheet ID', 'error')
+// Authentication methods
+const authenticateWithOAuth = async () => {
+  if (!CLIENT_ID) {
+    showMessage('Google Client ID not configured', 'error')
     return
   }
+
+  loading.value = true
+  authMethod.value = 'oauth'
   
-  localStorage.setItem('googleSheetsConfig', JSON.stringify(config))
-  isConfigured.value = true
-  showMessage('Configuration saved successfully!', 'success')
+  try {
+    if (typeof google === 'undefined') {
+      throw new Error('Google API not loaded. Please refresh the page.')
+    }
+
+    const token = await new Promise((resolve, reject) => {
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/spreadsheets',
+        callback: (tokenResponse) => {
+          if (tokenResponse.error) {
+            reject(new Error(tokenResponse.error))
+          } else if (tokenResponse.access_token) {
+            resolve(tokenResponse.access_token)
+          } else {
+            reject(new Error('No access token received'))
+          }
+        },
+      })
+      client.requestAccessToken()
+    })
+
+    accessToken.value = token
+    isAuthenticated.value = true
+    currentAuthMethod.value = 'OAuth'
+    showMessage('Successfully authenticated with Google!', 'success')
+    
+  } catch (error) {
+    console.error('OAuth authentication failed:', error)
+    showMessage(`Authentication failed: ${error.message}`, 'error')
+  } finally {
+    loading.value = false
+  }
 }
 
-const resetConfig = () => {
-  if (confirm('Are you sure you want to reset the configuration?')) {
-    localStorage.removeItem('googleSheetsConfig')
-    Object.assign(config, { apiKey: '', sheetId: '', sheetName: 'Sheet1' })
-    isConfigured.value = false
-    showMessage('Configuration reset successfully', 'success')
+const authenticateWithApiKey = async () => {
+  if (!API_KEY) {
+    showMessage('Google API Key not configured', 'error')
+    return
   }
+
+  loading.value = true
+  authMethod.value = 'apikey'
+  
+  try {
+    // Test the API key by making a simple request
+    const testUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}?key=${API_KEY}`
+    const response = await fetch(testUrl)
+    
+    if (!response.ok) {
+      throw new Error('Invalid API key or sheet not accessible')
+    }
+    
+    accessToken.value = API_KEY
+    isAuthenticated.value = true
+    currentAuthMethod.value = 'API Key'
+    showMessage('Successfully connected with API Key!', 'success')
+    
+  } catch (error) {
+    console.error('API Key authentication failed:', error)
+    showMessage(`API Key authentication failed: ${error.message}`, 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
+const signOut = () => {
+  accessToken.value = ''
+  isAuthenticated.value = false
+  currentAuthMethod.value = ''
+  authMethod.value = ''
+  showMessage('Signed out successfully', 'success')
 }
 
 // Form validation
@@ -247,36 +301,7 @@ const validateForm = () => {
 }
 
 // Google Sheets integration
-const getAccessToken = async () => {
-  if (!CLIENT_ID) {
-    throw new Error('Google Client ID not configured in environment variables')
-  }
-  
-  return new Promise((resolve, reject) => {
-    if (typeof google === 'undefined') {
-      reject(new Error('Google API not loaded'))
-      return
-    }
-    
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: 'https://www.googleapis.com/auth/spreadsheets',
-      callback: (tokenResponse) => {
-        if (tokenResponse.error) {
-          reject(new Error(tokenResponse.error))
-        } else {
-          resolve(tokenResponse.access_token)
-        }
-      },
-    })
-
-    client.requestAccessToken()
-  })
-}
-
 const appendToSheet = async () => {
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${config.sheetId}/values/${config.sheetName}!A:E:append?valueInputOption=RAW`
-
   const values = [
     [
       newProduct.name,
@@ -287,34 +312,39 @@ const appendToSheet = async () => {
     ]
   ]
 
-  try {
-    const accessToken = await getAccessToken()
+  let url, headers
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ values }),
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error?.message || 'Failed to add product to sheet')
+  if (currentAuthMethod.value === 'OAuth') {
+    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A:E:append?valueInputOption=RAW`
+    headers = {
+      'Authorization': `Bearer ${accessToken.value}`,
+      'Content-Type': 'application/json',
     }
-
-    return true
-  } catch (err) {
-    console.error('Error appending to sheet:', err)
-    throw err
+  } else {
+    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A:E:append?valueInputOption=RAW&key=${accessToken.value}`
+    headers = {
+      'Content-Type': 'application/json',
+    }
   }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ values }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error?.message || 'Failed to add product to sheet')
+  }
+
+  return true
 }
 
 // Main product addition logic
 const addProduct = async () => {
-  if (!isConfigured.value) {
-    showMessage('Please configure Google Sheets API first', 'error')
+  if (!isAuthenticated.value) {
+    showMessage('Please authenticate first', 'error')
     return
   }
   
@@ -324,34 +354,32 @@ const addProduct = async () => {
   message.value = ''
   
   try {
-    const success = await appendToSheet()
+    await appendToSheet()
     
-    if (success) {
-      // Add to recent products
-      const product = {
-        id: Date.now(),
-        name: newProduct.name,
-        price: parseFloat(newProduct.price),
-        currency: newProduct.currency,
-        shop: newProduct.shop,
-        date: newProduct.date
-      }
-      
-      recentProducts.value.unshift(product)
-      
-      // Keep only last 5 products
-      if (recentProducts.value.length > 5) {
-        recentProducts.value = recentProducts.value.slice(0, 5)
-      }
-      
-      // Save to localStorage
-      localStorage.setItem('recentProducts', JSON.stringify(recentProducts.value))
-      
-      // Reset form
-      resetForm()
-      
-      showMessage('Product added successfully!', 'success')
+    // Add to recent products
+    const product = {
+      id: Date.now(),
+      name: newProduct.name,
+      price: parseFloat(newProduct.price),
+      currency: newProduct.currency,
+      shop: newProduct.shop,
+      date: newProduct.date
     }
+    
+    recentProducts.value.unshift(product)
+    
+    // Keep only last 5 products
+    if (recentProducts.value.length > 5) {
+      recentProducts.value = recentProducts.value.slice(0, 5)
+    }
+    
+    // Save to localStorage
+    localStorage.setItem('recentProducts', JSON.stringify(recentProducts.value))
+    
+    // Reset form
+    resetForm()
+    
+    showMessage('Product added successfully!', 'success')
     
   } catch (error) {
     console.error('Error adding product:', error)
@@ -361,12 +389,20 @@ const addProduct = async () => {
   }
 }
 
+// Load recent products from localStorage
+const loadRecentProducts = () => {
+  const savedProducts = localStorage.getItem('recentProducts')
+  if (savedProducts) {
+    recentProducts.value = JSON.parse(savedProducts)
+  }
+}
+
 // Initialize on mount
 onMounted(() => {
-  loadConfig()
+  checkConfiguration()
+  loadRecentProducts()
 })
 </script>
-
 <style scoped>
 .container {
   max-width: 800px;
@@ -382,37 +418,134 @@ h1 {
   font-size: 2.5rem;
 }
 
-h2 {
+h2, h3 {
   color: #34495e;
   margin-bottom: 20px;
 }
 
-h3 {
-  color: #e67e22;
-  margin-top: 0;
+/* Configuration Status */
+.setup-info {
+  background: #fff3cd;
+  border: 2px solid #ffeaa7;
+  border-radius: 12px;
+  padding: 25px;
+  margin-bottom: 30px;
+}
+
+.setup-info ul {
+  list-style: none;
+  padding: 0;
+}
+
+.setup-info li {
+  padding: 8px 0;
+  font-family: monospace;
+  font-size: 14px;
+}
+
+.error-text {
+  color: #dc3545;
+  font-weight: 600;
+  margin-top: 15px;
+}
+
+/* Authentication Section */
+.auth-section {
+  background: #ffffff;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  margin-bottom: 30px;
+  text-align: center;
+}
+
+.auth-buttons {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.auth-btn {
+  padding: 15px 30px;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-width: 200px;
+}
+
+.oauth-btn {
+  background: linear-gradient(135deg, #4285f4, #34a853);
+  color: white;
+}
+
+.oauth-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #3367d6, #2d8f47);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.3);
+}
+
+.api-btn {
+  background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+  color: white;
+}
+
+.api-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ee5a24, #d63031);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
+}
+
+.auth-btn:disabled {
+  background: #6c757d;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Authentication Status */
+.auth-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #d1edff;
+  border-radius: 8px;
+  border: 1px solid #bee5eb;
+}
+
+.auth-indicator {
+  color: #0c5460;
+  font-weight: 600;
+}
+
+.sign-out-btn {
+  padding: 8px 16px;
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.3s ease;
+}
+
+.sign-out-btn:hover {
+  background: #c82333;
 }
 
 /* Form Containers */
-.form-container, .setup-info {
+.form-container {
   background: #ffffff;
   padding: 30px;
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
   margin-bottom: 30px;
   border: 1px solid #e9ecef;
-}
-
-.setup-info {
-  background: #fff8e1;
-  border-color: #ffcc02;
-}
-
-.config-form {
-  background: #ffffff;
-  padding: 25px;
-  border-radius: 8px;
-  margin-top: 20px;
-  border: 1px solid #dee2e6;
 }
 
 /* Form Styles */
@@ -452,9 +585,11 @@ input:hover, select:hover {
   border-color: #ced4da;
 }
 
-/* Buttons */
-.submit-btn, .config-btn, .reset-btn {
+/* Submit Button */
+.submit-btn {
   padding: 14px 28px;
+  background: linear-gradient(135deg, #007bff, #0056b3);
+  color: white;
   border: none;
   border-radius: 8px;
   font-size: 16px;
@@ -463,11 +598,6 @@ input:hover, select:hover {
   transition: all 0.3s ease;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-}
-
-.submit-btn {
-  background: linear-gradient(135deg, #007bff, #0056b3);
-  color: white;
 }
 
 .submit-btn:hover:not(:disabled) {
@@ -481,30 +611,6 @@ input:hover, select:hover {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
-}
-
-.config-btn {
-  background: linear-gradient(135deg, #28a745, #1e7e34);
-  color: white;
-}
-
-.config-btn:hover {
-  background: linear-gradient(135deg, #1e7e34, #155724);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.3);
-}
-
-.reset-btn {
-  background: linear-gradient(135deg, #dc3545, #c82333);
-  color: white;
-  font-size: 14px;
-  padding: 10px 20px;
-}
-
-.reset-btn:hover {
-  background: linear-gradient(135deg, #c82333, #a71e2a);
-  transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba(220, 53, 69, 0.3);
 }
 
 /* Messages */
@@ -584,26 +690,29 @@ input:hover, select:hover {
   font-size: 13px;
 }
 
-/* Reset Section */
-.reset-section {
-  text-align: center;
-  margin-top: 30px;
-  padding-top: 20px;
-  border-top: 1px solid #e9ecef;
-}
-
 /* Responsive Design */
 @media (max-width: 768px) {
   .container {
     padding: 15px;
   }
   
-  .form-container, .setup-info {
+  .form-container, .setup-info, .auth-section {
     padding: 20px;
   }
   
-  .config-form {
-    padding: 20px;
+  .auth-buttons {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .auth-btn {
+    min-width: 250px;
+  }
+  
+  .auth-status {
+    flex-direction: column;
+    gap: 10px;
+    text-align: center;
   }
   
   .product-item {
@@ -626,11 +735,11 @@ input:hover, select:hover {
     padding: 10px;
   }
   
-  .form-container, .setup-info {
+  .form-container, .setup-info, .auth-section {
     padding: 15px;
   }
   
-  input, select, .submit-btn, .config-btn {
+  input, select, .submit-btn, .auth-btn {
     font-size: 14px;
   }
   
