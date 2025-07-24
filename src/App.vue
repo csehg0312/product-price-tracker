@@ -1030,6 +1030,7 @@ h1 {
   padding: 15px;
   border-radius: 6px;
   margin-top: 20px;
+  color:black;
 }
 
 .debug-info h3 {
@@ -1088,26 +1089,26 @@ h1 {
 
 /* Shop-specific column styling */
 .price-table th.tesco_sk,
-.price-table td:nth-child(2) { background-color: #e3f2fd; }
+.price-table td:nth-child(2) { background-color: #0296ff; }
 
 .price-table th.lidl_sk,
-.price-table td:nth-child(3) { background-color: #f3e5f5; }
+.price-table td:nth-child(3) { background-color: #d500f6; }
 
 .price-table th.billa_sk,
-.price-table td:nth-child(4) { background-color: #e8f5e8; }
+.price-table td:nth-child(4) { background-color: #01ff01; }
 
 .price-table th.kaufland,
-.price-table td:nth-child(5) { background-color: #fff3e0; }
+.price-table td:nth-child(5) { background-color: #ffa008; }
 
 .price-table th.terno,
-.price-table td:nth-child(6) { background-color: #fce4ec; }
+.price-table td:nth-child(6) { background-color: #ff0055; }
 
 .price-table th.jednota,
-.price-table td:nth-child(7) { background-color: #e0f2f1; }
+.price-table td:nth-child(7) { background-color: #06fff3; }
 
 .price-table th.tesco_hu,
-.price-table td:nth-child(8) { background-color: #e1f5fe; }
+.price-table td:nth-child(8) { background-color: #00ff73; }
 
 .price-table th.tesco_hu_eur,
-.price-table td:nth-child(9) { background-color: #f1f8e9; }
+.price-table td:nth-child(9) { background-color: #88ff00; }
 </style>

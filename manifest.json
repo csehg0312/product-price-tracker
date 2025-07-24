@@ -1,0 +1,11 @@
+{
+  "name": "Product price tracker",
+  "shortName": "Prices",
+  "description": "A private app to track slovak and hungarian product prices",
+  "display": "fullscreen",
+  "themeColor": "#3BC43B",
+  "scope": "/",
+  "start_url": "/",
+  "lang": "en"
+}
+
