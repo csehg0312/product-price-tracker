@@ -30,76 +30,86 @@
         </div>
       </div>
 
-      <!-- Add Product Form -->
+      <!-- Product Price Table -->
       <div v-if="isAuthenticated" class="form-container">
         <div class="auth-status">
           <span class="auth-indicator">✅ Authenticated via {{ currentAuthMethod }}</span>
           <button @click="signOut" class="sign-out-btn">Sign Out</button>
+          <button @click="refreshFromSheet" :disabled="loading" class="refresh-btn">
+            {{ loading ? 'Loading...' : 'Refresh from Sheet' }}
+          </button>
         </div>
         
-        <h2>Add New Product</h2>
-        <form @submit.prevent="addProduct" class="product-form">
+        <h2>Product Price Comparison Table</h2>
+        
+        <!-- Add New Product Row -->
+        <div class="add-product-section">
           <div class="form-group">
-            <label for="productName">Product Name:</label>
+            <label for="productName">New Product Name:</label>
             <input 
               type="text" 
               id="productName" 
               v-model="newProduct.name" 
-              required 
               placeholder="Enter product name"
+              @keyup.enter="addNewProductRow"
             />
+            <button @click="addNewProductRow" :disabled="loading || !newProduct.name" class="add-row-btn">
+              Add New Product Row
+            </button>
           </div>
-          
-          <div class="form-group">
-            <label for="price">Price:</label>
-            <input 
-              type="number" 
-              id="price" 
-              v-model="newProduct.price" 
-              step="0.01" 
-              required 
-              placeholder="0.00"
-            />
-          </div>
-          
-          <div class="form-group">
-            <label for="currency">Currency:</label>
-            <select id="currency" v-model="newProduct.currency" required>
-              <option value="€">EUR (€)</option>
-              <option value="Ft">HUF (Ft)</option>
-              <option value="$">USD ($)</option>
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label for="shop">Shop:</label>
-            <select id="shop" v-model="newProduct.shop" required>
-              <option value="">Select a shop</option>
-              <option value="TESCO SK">TESCO SK</option>
-              <option value="LIDL SK">LIDL SK</option>
-              <option value="BILLA SK">BILLA SK</option>
-              <option value="KAUFLAND">KAUFLAND</option>
-              <option value="TERNO">TERNO</option>
-              <option value="JEDNOTA">JEDNOTA</option>
-              <option value="TESCO HU">TESCO HU</option>
-              <option value="TESCO HU €">TESCO HU €</option>
-            </select>
-          </div>
-          
-          <div class="form-group">
-            <label for="date">Date:</label>
-            <input 
-              type="date" 
-              id="date" 
-              v-model="newProduct.date" 
-              required 
-            />
-          </div>
-          
-          <button type="submit" :disabled="loading" class="submit-btn">
-            {{ loading ? 'Adding...' : 'Add Product' }}
+        </div>
+        
+        <!-- Price Table -->
+        <div class="price-table-container">
+          <table class="price-table">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th v-for="shop in shops" :key="shop.id" :class="shop.id">{{ shop.name }}</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(product, index) in productRows" :key="product.id" :class="{ 'unsaved': product.unsavedChanges }">
+                <td class="product-name-cell">
+                  <input 
+                    v-model="product.name" 
+                    @change="markAsUnsaved(product)"
+                    class="product-name-input"
+                  />
+                </td>
+                <td v-for="shop in shops" :key="`${product.id}-${shop.id}`">
+                  <div class="price-input-container">
+                    <input 
+                      type="number" 
+                      v-model="product.prices[shop.id]" 
+                      step="0.01" 
+                      placeholder="0.00"
+                      @change="markAsUnsaved(product)"
+                      class="price-input"
+                    />
+                    <span class="currency-indicator">{{ shop.currency }}</span>
+                  </div>
+                </td>
+                <td>
+                  <button @click="removeProductRow(index)" class="remove-btn" title="Remove product">
+                    <span>×</span>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        
+        <!-- Bulk Actions -->
+        <div class="bulk-actions">
+          <button @click="saveAllPrices" :disabled="loading || !hasUnsavedChanges" class="submit-btn">
+            {{ loading ? 'Saving...' : `Save Changes (${unsavedCount})` }}
           </button>
-        </form>
+          <button @click="discardChanges" :disabled="loading || !hasUnsavedChanges" class="discard-btn">
+            Discard Changes
+          </button>
+        </div>
       </div>
       
       <!-- Status Messages -->
@@ -107,40 +117,46 @@
         {{ message }}
       </div>
       
-      <!-- Recent Products -->
-      <div v-if="recentProducts.length > 0" class="recent-products">
-        <h3>Recently Added Products</h3>
-        <div class="products-list">
-          <div 
-            v-for="product in recentProducts" 
-            :key="product.id" 
-            class="product-item"
-          >
-            <span class="product-name">{{ product.name }}</span>
-            <span class="product-price">{{ product.price }}{{ product.currency }}</span>
-            <span class="product-shop">{{ product.shop }}</span>
-            <span class="product-date">{{ product.date }}</span>
-          </div>
-        </div>
+      <!-- Debug Info (only in development) -->
+      <div v-if="showDebugInfo" class="debug-info">
+        <h3>Debug Information</h3>
+        <pre>{{ debugInfo }}</pre>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 
 // Environment variables
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 const SHEET_ID = import.meta.env.VITE_SPREADSHEET_ID
-const API_KEY = import.meta.env.GOOGLE_API_KEY
-const SHEET_NAME = 'Sheet1'
-const CURRENT_ROW = 17
+const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY
+const SHEET_NAME = import.meta.env.VITE_SHEET_NAME || 'Sheet1'
+const DISCOVERY_DOC = 'https://sheets.googleapis.com/$discovery/rest?version=v4'
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets'
+
+// Shop definitions
+const shops = [
+  { id: 'tesco_sk', name: 'TESCO SK', currency: '€' },
+  { id: 'lidl_sk', name: 'LIDL SK', currency: '€' },
+  { id: 'billa_sk', name: 'BILLA SK', currency: '€' },
+  { id: 'kaufland', name: 'KAUFLAND', currency: '€' },
+  { id: 'terno', name: 'TERNO', currency: '€' },
+  { id: 'jednota', name: 'JEDNOTA', currency: '€' },
+  { id: 'tesco_hu', name: 'TESCO HU', currency: 'Ft' },
+  { id: 'tesco_hu_eur', name: 'TESCO HU €', currency: '€' }
+]
+
+// Initialize with empty array - will be populated from sheet
+const productRows = ref([])
 
 console.log('Environment variables loaded:', {
   CLIENT_ID: CLIENT_ID ? 'Set' : 'Missing',
   SHEET_ID: SHEET_ID ? 'Set' : 'Missing', 
-  API_KEY: API_KEY ? 'Set' : 'Missing'
+  API_KEY: API_KEY ? 'Set' : 'Missing',
+  SHEET_NAME
 })
 
 // Reactive state
@@ -152,21 +168,38 @@ const isAuthenticated = ref(false)
 const authMethod = ref('')
 const currentAuthMethod = ref('')
 const accessToken = ref('')
+const gapi = ref(null)
+const googleAuth = ref(null)
+const showDebugInfo = ref(import.meta.env.DEV)
 
 const newProduct = reactive({
-  name: '',
-  price: '',
-  currency: '€',
-  shop: '',
-  date: new Date().toISOString().split('T')[0]
+  name: ''
 })
 
-const recentProducts = ref([])
+// Computed properties
+const hasUnsavedChanges = computed(() => {
+  return productRows.value.some(product => product.unsavedChanges)
+})
+
+const unsavedCount = computed(() => {
+  return productRows.value.filter(product => product.unsavedChanges).length
+})
+
+const debugInfo = computed(() => {
+  return {
+    isAuthenticated: isAuthenticated.value,
+    authMethod: authMethod.value,
+    productCount: productRows.value.length,
+    unsavedChanges: unsavedCount.value,
+    hasToken: !!accessToken.value
+  }
+})
 
 // Utility functions
-const showMessage = (text, type) => {
+const showMessage = (text, type = 'info') => {
   message.value = text
   messageClass.value = type
+  console.log(`[${type.toUpperCase()}] ${text}`)
   setTimeout(() => {
     message.value = ''
     messageClass.value = ''
@@ -175,11 +208,7 @@ const showMessage = (text, type) => {
 
 const resetForm = () => {
   Object.assign(newProduct, {
-    name: '',
-    price: '',
-    currency: '€',
-    shop: '',
-    date: new Date().toISOString().split('T')[0]
+    name: ''
   })
 }
 
@@ -188,12 +217,43 @@ const checkConfiguration = () => {
   isConfigured.value = !!(CLIENT_ID && SHEET_ID)
   
   if (!isConfigured.value) {
-    if (!CLIENT_ID) {
-      showMessage('GOOGLE_CLIENT_ID missing in .env file', 'error')
+    const missing = []
+    if (!CLIENT_ID) missing.push('VITE_GOOGLE_CLIENT_ID')
+    if (!SHEET_ID) missing.push('VITE_SPREADSHEET_ID')
+    
+    showMessage(`Missing environment variables: ${missing.join(', ')}`, 'error')
+  }
+  
+  return isConfigured.value
+}
+
+// Initialize Google API
+const initializeGoogleAPI = async () => {
+  try {
+    if (typeof gapi === 'undefined') {
+      throw new Error('Google API (gapi) not loaded. Please ensure the Google API script is included.')
     }
-    if (!SHEET_ID) {
-      showMessage('SPREADSHEET_ID missing in .env file', 'error')
-    }
+
+    await new Promise((resolve, reject) => {
+      gapi.load('client:auth2', {
+        callback: resolve,
+        onerror: reject
+      })
+    })
+
+    await gapi.client.init({
+      apiKey: API_KEY,
+      clientId: CLIENT_ID,
+      discoveryDocs: [DISCOVERY_DOC],
+      scope: SCOPES
+    })
+
+    googleAuth.value = gapi.auth2.getAuthInstance()
+    console.log('Google API initialized successfully')
+    return true
+  } catch (error) {
+    console.error('Failed to initialize Google API:', error)
+    throw error
   }
 }
 
@@ -242,6 +302,7 @@ const authenticateWithOAuth = async () => {
   }
 }
 
+
 const authenticateWithApiKey = async () => {
   if (!API_KEY) {
     showMessage('Google API Key not configured', 'error')
@@ -257,13 +318,17 @@ const authenticateWithApiKey = async () => {
     const response = await fetch(testUrl)
     
     if (!response.ok) {
-      throw new Error('Invalid API key or sheet not accessible')
+      const error = await response.json()
+      throw new Error(error.error?.message || 'Invalid API key or sheet not accessible')
     }
     
     accessToken.value = API_KEY
     isAuthenticated.value = true
     currentAuthMethod.value = 'API Key'
     showMessage('Successfully connected with API Key!', 'success')
+    
+    // Load existing products from the sheet
+    await loadProductsFromSheet()
     
   } catch (error) {
     console.error('API Key authentication failed:', error)
@@ -273,192 +338,407 @@ const authenticateWithApiKey = async () => {
   }
 }
 
-const signOut = () => {
-  accessToken.value = ''
-  isAuthenticated.value = false
-  currentAuthMethod.value = ''
-  authMethod.value = ''
-  showMessage('Signed out successfully', 'success')
+const signOut = async () => {
+  try {
+    if (authMethod.value === 'oauth' && googleAuth.value) {
+      await googleAuth.value.signOut()
+    }
+    
+    accessToken.value = ''
+    isAuthenticated.value = false
+    currentAuthMethod.value = ''
+    authMethod.value = ''
+    productRows.value = []
+    
+    showMessage('Signed out successfully', 'success')
+  } catch (error) {
+    console.error('Sign out error:', error)
+    showMessage('Signed out with errors', 'warning')
+  }
 }
 
-// Form validation
-const validateForm = () => {
+// Product management functions
+const markAsUnsaved = (product) => {
+  product.unsavedChanges = true
+}
+
+const addNewProductRow = () => {
   if (!newProduct.name.trim()) {
-    showMessage('Product name is required', 'error')
-    return false
+    showMessage('Please enter a product name', 'error')
+    return
   }
   
-  if (!newProduct.price || newProduct.price <= 0) {
-    showMessage('Please enter a valid price', 'error')
-    return false
+  const productName = newProduct.name.trim()
+  
+  // Check if product already exists
+  const existingProduct = productRows.value.find(p => 
+    p.name.toLowerCase() === productName.toLowerCase()
+  )
+  
+  if (existingProduct) {
+    showMessage('Product already exists in the table', 'warning')
+    return
   }
   
-  if (!newProduct.shop) {
-    showMessage('Please select a shop', 'error')
-    return false
-  }
+  const newId = productRows.value.length > 0 
+    ? Math.max(...productRows.value.map(p => p.id)) + 1 
+    : 1
+    
+  productRows.value.push({
+    id: newId,
+    name: productName,
+    prices: {},
+    unsavedChanges: true,
+    isNew: true
+  })
   
-  return true
+  resetForm()
+  showMessage(`Added new product: ${productName}`, 'success')
+}
+
+const removeProductRow = (index) => {
+  const product = productRows.value[index]
+  if (confirm(`Are you sure you want to remove "${product.name}"?`)) {
+    productRows.value.splice(index, 1)
+    showMessage('Product removed', 'success')
+  }
+}
+
+const discardChanges = () => {
+  if (confirm('Are you sure you want to discard all unsaved changes?')) {
+    loadProductsFromSheet()
+    showMessage('Changes discarded', 'info')
+  }
+}
+
+const refreshFromSheet = () => {
+  loadProductsFromSheet()
 }
 
 // Google Sheets integration
-const appendToSheet = async () => {
-  const values = [
-    [
-      newProduct.name,
-      `${newProduct.price}${newProduct.currency}`,
-      newProduct.shop,
-      newProduct.date,
-      new Date().toISOString()
-    ]
-  ]
+const buildSheetUrl = (range = '', method = 'GET') => {
+  const baseUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}`
+  
+  if (authMethod.value === 'oauth') {
+    return range ? `${baseUrl}!${range}` : `${baseUrl}!A:Z`
+  } else {
+    const url = range ? `${baseUrl}!${range}` : `${baseUrl}!A:Z`
+    return `${url}?key=${API_KEY}`
+  }
+}
 
-  let url, headers
-
-  if (currentAuthMethod.value === 'OAuth') {
-    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A${CURRENT_ROW}:E${CURRENT_ROW}:append?valueInputOption=USER_ENTERED`
-    headers = {
+const buildRequestHeaders = () => {
+  if (authMethod.value === 'oauth') {
+    return {
       'Authorization': `Bearer ${accessToken.value}`,
       'Content-Type': 'application/json',
     }
-    CURRENT_ROW=CURRENT_ROW + 1
   } else {
-    url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A${CURRENT_ROW}:E${CURRENT_ROW}:append?valueInputOption=USER_ENTERED`
-    headers = {
+    return {
       'Content-Type': 'application/json',
     }
-    CURRENT_ROW = CURRENT_ROW + 1
   }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ values }),
-  })
-
-  if (!response.ok) {
-    const error = await response.json()
-    throw new Error(error.error?.message || 'Failed to add product to sheet')
-  }
-
-  return true
 }
 
-// Main product addition logic
-const addProduct = async () => {
+const parsePrice = (cellValue, currency) => {
+  if (!cellValue || cellValue.trim() === '') return ''
+  
+  // Remove currency symbols and extra spaces
+  let cleanValue = cellValue.toString()
+    .replace(/€/g, '')
+    .replace(/Ft/g, '')
+    .replace(/\s+/g, '')
+    .trim()
+  
+  // Handle comma as decimal separator
+  if (cleanValue.includes(',') && !cleanValue.includes('.')) {
+    cleanValue = cleanValue.replace(',', '.')
+  }
+  
+  // Extract numeric value
+  const match = cleanValue.match(/[\d.]+/)
+  if (match) {
+    const numericValue = parseFloat(match[0])
+    return isNaN(numericValue) ? '' : numericValue.toString()
+  }
+  
+  return ''
+}
+
+const formatPrice = (price, currency) => {
+  if (!price || price === '') return ''
+  
+  const numericPrice = parseFloat(price)
+  if (isNaN(numericPrice)) return ''
+  
+  if (currency === 'Ft') {
+    return `${numericPrice.toFixed(2).replace('.', ',')} Ft`
+  } else {
+    return `${numericPrice.toFixed(2).replace('.', ',')}€`
+  }
+}
+
+const loadProductsFromSheet = async () => {
   if (!isAuthenticated.value) {
     showMessage('Please authenticate first', 'error')
     return
   }
   
-  if (!validateForm()) return
-  
   loading.value = true
-  message.value = ''
   
   try {
-    await appendToSheet()
+    let url, headers
     
-    // Add to recent products
-    const product = {
-      id: Date.now(),
-      name: newProduct.name,
-      price: parseFloat(newProduct.price),
-      currency: newProduct.currency,
-      shop: newProduct.shop,
-      date: newProduct.date
+    // Build URL with properly encoded sheet name
+    const encodedSheetName = encodeURIComponent(SHEET_NAME)
+    if (authMethod.value === 'oauth') {
+      url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodedSheetName}`
+      headers = {
+        'Authorization': `Bearer ${accessToken.value}`,
+        'Content-Type': 'application/json',
+      }
+    } else {
+      url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodedSheetName}?key=${API_KEY}`
+      headers = {
+        'Content-Type': 'application/json',
+      }
     }
     
-    recentProducts.value.unshift(product)
+    console.log('Loading products from:', url)
     
-    // Keep only last 5 products
-    if (recentProducts.value.length > 5) {
-      recentProducts.value = recentProducts.value.slice(0, 5)
+    const response = await fetch(url, {
+      method: 'GET',
+      headers
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      console.error('API Error:', error)
+      throw new Error(error.error?.message || `HTTP ${response.status}: Failed to load products from sheet`)
     }
     
-    // Save to localStorage
-    localStorage.setItem('recentProducts', JSON.stringify(recentProducts.value))
+    const data = await response.json()
+    const values = data.values || []
     
-    // Reset form
-    resetForm()
+    console.log('Raw sheet data:', values)
     
-    showMessage('Product added successfully!', 'success')
+    if (values.length === 0) {
+      productRows.value = []
+      showMessage('Sheet is empty', 'info')
+      return
+    }
+    
+    // Find header row (look for "Product" or similar)
+    let headerRowIndex = -1
+    let headerRow = null
+    
+    for (let i = 0; i < Math.min(5, values.length); i++) {
+      const row = values[i]
+      if (row && row[0] && (
+        row[0].toLowerCase().includes('product') ||
+        row[0].toLowerCase().includes('name') ||
+        row[0].toLowerCase().includes('item')
+      )) {
+        headerRowIndex = i
+        headerRow = row
+        break
+      }
+    }
+    
+    // If no header found, assume first row with data is products
+    if (headerRowIndex === -1) {
+      headerRowIndex = 0
+      headerRow = values[0]
+    }
+    
+    console.log('Header row found at index:', headerRowIndex, headerRow)
+    
+    // Parse products starting from the row after header
+    const loadedProducts = []
+    const startRow = headerRowIndex + 1
+    
+    for (let i = startRow; i < values.length; i++) {
+      const row = values[i]
+      if (!row || !row[0] || row[0].toString().trim() === '') continue
+      
+      const product = {
+        id: Date.now() + i,
+        name: row[0].toString().trim(),
+        prices: {},
+        unsavedChanges: false,
+        isNew: false
+      }
+      
+      // Map prices to shops (assuming columns match shop order)
+      shops.forEach((shop, shopIndex) => {
+        const cellValue = row[shopIndex + 1] // +1 because column 0 is product name
+        const price = parsePrice(cellValue, shop.currency)
+        if (price) {
+          product.prices[shop.id] = price
+        }
+      })
+      
+      loadedProducts.push(product)
+    }
+    
+    productRows.value = loadedProducts
+    
+    if (loadedProducts.length > 0) {
+      showMessage(`Loaded ${loadedProducts.length} products from sheet`, 'success')
+    } else {
+      showMessage('No products found in sheet', 'info')
+    }
+    
+    console.log('Loaded products:', loadedProducts)
     
   } catch (error) {
-    console.error('Error adding product:', error)
-    showMessage(`Error adding product: ${error.message}`, 'error')
+    console.error('Error loading products from sheet:', error)
+    showMessage(`Error loading products: ${error.message}`, 'error')
   } finally {
     loading.value = false
   }
 }
 
-// Load recent products from localStorage
-const loadRecentProducts = () => {
-  const savedProducts = localStorage.getItem('recentProducts')
-  if (savedProducts) {
-    recentProducts.value = JSON.parse(savedProducts)
+const saveAllPrices = async () => {
+  if (!isAuthenticated.value) {
+    showMessage('Please authenticate first', 'error')
+    return
+  }
+  
+  loading.value = true
+  
+  try {
+    const productsToUpdate = productRows.value.filter(p => p.unsavedChanges)
+    
+    if (productsToUpdate.length === 0) {
+      showMessage('No changes to save', 'info')
+      return
+    }
+    
+    console.log(`Saving ${productsToUpdate.length} products...`)
+    
+    // Prepare batch update data
+    const sheetData = []
+    
+    // Add header row
+    const headerRow = ['Product', ...shops.map(shop => shop.name)]
+    sheetData.push(headerRow)
+    
+    // Add all products (both changed and unchanged)
+    productRows.value.forEach(product => {
+      const row = [product.name]
+      shops.forEach(shop => {
+        const price = product.prices[shop.id]
+        row.push(price ? formatPrice(price, shop.currency) : '')
+      })
+      sheetData.push(row)
+    })
+    
+    console.log('Sheet data to save:', sheetData)
+    
+    // Clear the sheet and write all data
+    if (authMethod.value === 'oauth') {
+      // Clear existing data
+      const clearUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A:Z:clear`
+      await fetch(clearUrl, {
+        method: 'POST',
+        headers: buildRequestHeaders()
+      })
+      
+      // Write new data
+      const updateUrl = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${SHEET_NAME}!A1?valueInputOption=USER_ENTERED`
+      const response = await fetch(updateUrl, {
+        method: 'PUT',
+        headers: buildRequestHeaders(),
+        body: JSON.stringify({ values: sheetData })
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error?.message || 'Failed to save to sheet')
+      }
+    } else {
+      // For API key method, we need to handle this differently
+      // This is a limitation - API key doesn't allow clearing/updating ranges
+      showMessage('Batch update not supported with API key. Please use OAuth method.', 'warning')
+      return
+    }
+    
+    // Mark all products as saved
+    productRows.value.forEach(product => {
+      product.unsavedChanges = false
+      product.isNew = false
+    })
+    
+    showMessage(`Successfully saved ${productsToUpdate.length} products!`, 'success')
+    
+  } catch (error) {
+    console.error('Error saving prices:', error)
+    showMessage(`Error saving: ${error.message}`, 'error')
+  } finally {
+    loading.value = false
   }
 }
 
 // Initialize on mount
-onMounted(() => {
-  checkConfiguration()
-  loadRecentProducts()
+onMounted(async () => {
+  console.log('App mounted, checking configuration...')
+  
+  if (checkConfiguration()) {
+    console.log('Configuration valid')
+    
+    // Load Google API script if not already loaded
+    if (typeof gapi === 'undefined') {
+      console.log('Loading Google API script...')
+      const script = document.createElement('script')
+      script.src = 'https://apis.google.com/js/api.js'
+      script.onload = () => {
+        console.log('Google API script loaded')
+      }
+      document.head.appendChild(script)
+    }
+  }
 })
 </script>
+
+
 <style scoped>
 .container {
-  max-width: 800px;
+  max-width: 1200px;
   margin: 0 auto;
   padding: 20px;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
 h1 {
+  color: #333;
   text-align: center;
-  color: #2c3e50;
   margin-bottom: 30px;
-  font-size: 2.5rem;
 }
 
-h2, h3 {
-  color: #34495e;
+.setup-info {
+  background: #fff3cd;
+  border: 1px solid #ffeaa7;
+  padding: 20px;
+  border-radius: 8px;
   margin-bottom: 20px;
 }
 
-/* Configuration Status */
-.setup-info {
-  background: #fff3cd;
-  border: 2px solid #ffeaa7;
-  border-radius: 12px;
-  padding: 25px;
-  margin-bottom: 30px;
-}
-
 .setup-info ul {
-  list-style: none;
-  padding: 0;
-}
-
-.setup-info li {
-  padding: 8px 0;
-  font-family: monospace;
-  font-size: 14px;
+  margin: 10px 0;
+  padding-left: 20px;
 }
 
 .error-text {
-  color: #dc3545;
-  font-weight: 600;
-  margin-top: 15px;
+  color: #721c24;
+  font-weight: bold;
 }
 
-/* Authentication Section */
 .auth-section {
-  background: #ffffff;
-  padding: 30px;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  margin-bottom: 30px;
+  background: #f8f9fa;
+  padding: 20px;
+  border-radius: 8px;
+  margin-bottom: 20px;
   text-align: center;
 }
 
@@ -466,241 +746,309 @@ h2, h3 {
   display: flex;
   gap: 15px;
   justify-content: center;
-  flex-wrap: wrap;
+  margin-top: 15px;
 }
 
 .auth-btn {
-  padding: 15px 30px;
+  padding: 12px 24px;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   font-size: 16px;
-  font-weight: 600;
   cursor: pointer;
   transition: all 0.3s ease;
-  min-width: 200px;
+  min-width: 180px;
 }
 
 .oauth-btn {
-  background: linear-gradient(135deg, #4285f4, #34a853);
+  background: #4285f4;
   color: white;
 }
 
 .oauth-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #3367d6, #2d8f47);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(66, 133, 244, 0.3);
+  background: #3367d6;
 }
 
 .api-btn {
-  background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+  background: #34a853;
   color: white;
 }
 
 .api-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #ee5a24, #d63031);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
+  background: #2d8f47;
 }
 
 .auth-btn:disabled {
-  background: #6c757d;
+  opacity: 0.6;
   cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
 }
 
-/* Authentication Status */
+.form-container {
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
 .auth-status {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
-  padding: 15px;
-  background: #d1edff;
-  border-radius: 8px;
-  border: 1px solid #bee5eb;
+  padding: 10px;
+  background: #e8f5e8;
+  border-radius: 6px;
 }
 
 .auth-indicator {
-  color: #0c5460;
-  font-weight: 600;
+  color: #155724;
+  font-weight: bold;
 }
 
-.sign-out-btn {
+.sign-out-btn, .refresh-btn {
   padding: 8px 16px;
-  background: #dc3545;
+  background: #6c757d;
   color: white;
   border: none;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 14px;
-  transition: background 0.3s ease;
+  margin-left: 10px;
 }
 
-.sign-out-btn:hover {
-  background: #c82333;
+.sign-out-btn:hover, .refresh-btn:hover {
+  background: #545b62;
 }
 
-/* Form Containers */
-.form-container {
-  background: #ffffff;
-  padding: 30px;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  margin-bottom: 30px;
-  border: 1px solid #e9ecef;
-}
-
-/* Form Styles */
-.product-form {
-  display: grid;
-  gap: 20px;
+.add-product-section {
+  margin-bottom: 20px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 6px;
 }
 
 .form-group {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
 
-label {
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #495057;
-  font-size: 0.95rem;
+.form-group label {
+  font-weight: bold;
+  min-width: 150px;
 }
 
-input, select {
-  padding: 14px 16px;
-  border: 2px solid #e9ecef;
-  border-radius: 8px;
-  font-size: 16px;
-  transition: all 0.3s ease;
-  background-color: #ffffff;
+.form-group input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
 }
 
-input:focus, select:focus {
-  outline: none;
-  border-color: #007bff;
-  box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
-}
-
-input:hover, select:hover {
-  border-color: #ced4da;
-}
-
-/* Submit Button */
-.submit-btn {
-  padding: 14px 28px;
-  background: linear-gradient(135deg, #007bff, #0056b3);
+.add-row-btn {
+  padding: 8px 16px;
+  background: #007bff;
   color: white;
   border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: 600;
+  border-radius: 4px;
   cursor: pointer;
-  transition: all 0.3s ease;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+}
+
+.add-row-btn:hover:not(:disabled) {
+  background: #0056b3;
+}
+
+.add-row-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.price-table-container {
+  overflow-x: auto;
+  margin-bottom: 20px;
+}
+
+.price-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+}
+
+.price-table th,
+.price-table td {
+  padding: 12px 8px;
+  text-align: left;
+  border: 1px solid #ddd;
+}
+
+.price-table th {
+  background: #f8f9fa;
+  font-weight: bold;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.price-table tbody tr:hover {
+  background: #f5f5f5;
+}
+
+.price-table tbody tr.unsaved {
+  background: #fff3cd;
+}
+
+.product-name-cell {
+  min-width: 200px;
+  font-weight: bold;
+}
+
+.product-name-input {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.price-input-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.price-input {
+  width: 80px;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  text-align: right;
+}
+
+.currency-indicator {
+  font-size: 12px;
+  color: #666;
+  min-width: 20px;
+}
+
+.remove-btn {
+  background: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.remove-btn:hover {
+  background: #c82333;
+}
+
+.bulk-actions {
+  display: flex;
+  gap: 15px;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.submit-btn {
+  padding: 12px 24px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
 }
 
 .submit-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #0056b3, #004085);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+  background: #218838;
 }
 
 .submit-btn:disabled {
-  background: #6c757d;
+  opacity: 0.6;
   cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
 }
 
-/* Messages */
+.discard-btn {
+  padding: 12px 24px;
+  background: #6c757d;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.discard-btn:hover:not(:disabled) {
+  background: #545b62;
+}
+
+.discard-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .message {
-  padding: 16px 20px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-  text-align: center;
-  font-weight: 600;
-  font-size: 15px;
+  padding: 15px;
+  border-radius: 6px;
+  margin: 20px 0;
+  font-weight: bold;
 }
 
-.success {
-  background: #d1edff;
-  color: #0c5460;
-  border: 1px solid #bee5eb;
+.message.success {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
 }
 
-.error {
+.message.error {
   background: #f8d7da;
   color: #721c24;
   border: 1px solid #f5c6cb;
 }
 
-/* Recent Products */
-.recent-products {
-  background: #ffffff;
-  padding: 25px;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-  margin-bottom: 20px;
-  border: 1px solid #e9ecef;
+.message.warning {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeaa7;
 }
 
-.products-list {
-  display: grid;
-  gap: 12px;
+.message.info {
+  background: #d1ecf1;
+  color: #0c5460;
+  border: 1px solid #bee5eb;
 }
 
-.product-item {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1.2fr 1fr;
-  gap: 15px;
-  padding: 16px 20px;
+.debug-info {
   background: #f8f9fa;
-  border-radius: 8px;
-  align-items: center;
-  transition: all 0.2s ease;
-  border: 1px solid #e9ecef;
+  border: 1px solid #dee2e6;
+  padding: 15px;
+  border-radius: 6px;
+  margin-top: 20px;
 }
 
-.product-item:hover {
-  background: #e9ecef;
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.product-name {
-  font-weight: 600;
-  color: #2c3e50;
-}
-
-.product-price {
-  color: #007bff;
-  font-weight: 700;
-  font-size: 1.1rem;
-}
-
-.product-shop {
+.debug-info h3 {
+  margin-top: 0;
   color: #6c757d;
-  font-size: 14px;
-  font-weight: 500;
 }
 
-.product-date {
-  color: #adb5bd;
-  font-size: 13px;
+.debug-info pre {
+  background: #e9ecef;
+  padding: 10px;
+  border-radius: 4px;
+  overflow: auto;
+  font-size: 12px;
 }
 
-/* Responsive Design */
+/* Responsive design */
 @media (max-width: 768px) {
   .container {
-    padding: 15px;
-  }
-  
-  .form-container, .setup-info, .auth-section {
-    padding: 20px;
+    padding: 10px;
   }
   
   .auth-buttons {
@@ -708,8 +1056,14 @@ input:hover, select:hover {
     align-items: center;
   }
   
-  .auth-btn {
-    min-width: 250px;
+  .form-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .form-group label {
+    min-width: auto;
+    margin-bottom: 5px;
   }
   
   .auth-status {
@@ -718,36 +1072,42 @@ input:hover, select:hover {
     text-align: center;
   }
   
-  .product-item {
-    grid-template-columns: 1fr;
-    gap: 8px;
-    text-align: center;
+  .bulk-actions {
+    flex-direction: column;
   }
   
-  .product-item span {
-    padding: 4px 0;
-  }
-  
-  h1 {
-    font-size: 2rem;
-  }
-}
-
-@media (max-width: 480px) {
-  .container {
-    padding: 10px;
-  }
-  
-  .form-container, .setup-info, .auth-section {
-    padding: 15px;
-  }
-  
-  input, select, .submit-btn, .auth-btn {
+  .price-table {
     font-size: 14px;
   }
   
-  h1 {
-    font-size: 1.8rem;
+  .price-table th,
+  .price-table td {
+    padding: 8px 4px;
   }
 }
+
+/* Shop-specific column styling */
+.price-table th.tesco_sk,
+.price-table td:nth-child(2) { background-color: #e3f2fd; }
+
+.price-table th.lidl_sk,
+.price-table td:nth-child(3) { background-color: #f3e5f5; }
+
+.price-table th.billa_sk,
+.price-table td:nth-child(4) { background-color: #e8f5e8; }
+
+.price-table th.kaufland,
+.price-table td:nth-child(5) { background-color: #fff3e0; }
+
+.price-table th.terno,
+.price-table td:nth-child(6) { background-color: #fce4ec; }
+
+.price-table th.jednota,
+.price-table td:nth-child(7) { background-color: #e0f2f1; }
+
+.price-table th.tesco_hu,
+.price-table td:nth-child(8) { background-color: #e1f5fe; }
+
+.price-table th.tesco_hu_eur,
+.price-table td:nth-child(9) { background-color: #f1f8e9; }
 </style>
